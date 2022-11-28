@@ -90,7 +90,6 @@ def prepare_newCopy(cleaned):
    for row in cleaned:
       rowDict = {}
       for header in headers:
-         print(row)
          if len(row) == 7:
             item = row[headers.index(header)]
             rowDict[header] = item
@@ -104,7 +103,8 @@ def prepare_newCopy(cleaned):
                rowDict[header] = item
          else:
             continue
-      newCopy.append(rowDict)
+      if len(rowDict) != 0:
+         newCopy.append(rowDict)
 
    # Convert the bullets to a list with HTML added
    for rowDict in newCopy:
@@ -112,22 +112,23 @@ def prepare_newCopy(cleaned):
       for key in rowDict:
          if key != 'sku' and key != 'title':
             bulletList.append(rowDict[key])
-      rowDict['copy'] = bulletList
+      if len(bulletList) > 0:
+         rowDict['copy'] = bulletList
 
       # Combine the html and copy into one item
       body = '<ul>'
       for item in rowDict['copy']:
-            item = re.sub('TRAVEL-FRIENDLY', 'TRAVEL FRIENDLY', item)
-            item = re.sub('â€“', '-', item)
-            # Add the bold tags around the item header
-            splitItem = item.split("-", 1)
-            for chunk in splitItem:
-               if splitItem.index(chunk) == 0:
-                  chunk = chunk.rstrip(chunk[-1])
-                  chunk = "<b>" + chunk + "</b>" + " -"
-                  item = chunk + splitItem[1]
-            item = '<li>' + item + '</li>'
-            body = body + item
+         item = re.sub('TRAVEL-FRIENDLY', 'TRAVEL FRIENDLY', item)
+         item = re.sub('â€“', '-', item)
+         # Add the bold tags around the item header
+         splitItem = item.split("-", 1)
+         for chunk in splitItem:
+            if splitItem.index(chunk) == 0:
+               chunk = chunk.rstrip(chunk[-1])
+               chunk = "<b>" + chunk + "</b>" + " -"
+               item = chunk + splitItem[1]
+         item = '<li>' + item + '</li>'
+         body = body + item
       body = body + '</ul>'
       rowDict['copy'] = body
    return(newCopy)
@@ -150,36 +151,51 @@ def read_currentCopy(file):
    return(currentCopy)
 
 ## Update the currentCopy with the newCopy
-def update_copy(newCopy, currentCopy):
+def update_import(new_copy, current_copy, product_images):
    # Create a list to hold the products
    for_import = []
 
-   # Create a list to hold any current images
-   for dictC in currentCopy:
-      # # Checks the current dictionary for the Variant SKU key
-      if 'Variant SKU' in dictC:
-            for dictN in newCopy:
-               if dictC['Variant SKU'] == dictN['sku']:
-                  # Create a dictionary to hold the product data
-                  prodDict = {}
+   for dictN in new_copy:
+      # Create a dictionary to hold the product data
+      prodDict = {}
+      # Create a list to hold the product rows
+      prodRows = []
+      for dictC in current_copy:
+         # Checks the current dictionary for the Variant SKU key
+         if 'Variant SKU' in dictC:
+            if dictC['Variant SKU'] == dictN['sku']:
+               # Create a dictionary for the product columns
+               prodCols = {}
 
-                  # Create a list to hold the product rows
-                  prodRows = []
+               # Add the keys and values to the columns dictionary
+               prodCols['Handle'] = dictC['Handle']
+               prodCols['Title'] = dictC['Title']
+               prodCols['Body (HTML)'] = dictN['copy']
+               prodCols['Variant SKU'] = dictC['Variant SKU']
+               if dictN['sku'] in product_images:   
+                  prodCols['Image Src'] = 'https://cdn.shopify.com/s/files/1/0577/0035/2197/files/' + product_images[dictC['Variant SKU']][0]
+                  prodCols['Image Alt Text'] = dictC['Variant SKU'] + ' - ' + dictC['Title'] + dictC['Handle']
 
+               # Add the rows for the product
+               prodRows.append(prodCols)
+
+         else:
+            if dictN['sku'] in product_images:     
+               for image in product_images[dictN['sku']]:
                   # Create a dictionary for the product columns
                   prodCols = {}
 
                   # Add the keys and values to the columns dictionary
                   prodCols['Handle'] = dictC['Handle']
-                  prodCols['Title'] = dictC['Title']
-                  prodCols['Body (HTML)'] = dictN['copy']
-                  prodCols['Variant SKU'] = dictC['Variant SKU']
-                  # prodCols['Image Src'] = dictC['Image Src']
-                  # prodCols['Image Alt Text'] = dictC['Image Alt Text']
+                  prodCols['Image Src'] = 'https://cdn.shopify.com/s/files/1/0577/0035/2197/files/' + image
+                  prodCols['Image Alt Text'] = dictN['sku'] + ' - ' + dictN['title'] + dictC['Handle']
 
-                  # Assign the key for the product dictionary to the SKU
-                  prodDict[dictC['Variant SKU']] = prodRows
+                  # Add the rows for the product
+                  prodRows.append(prodCols)
 
+      # Assign the key for the product dictionary to the SKU
+      prodDict[dictN['sku']] = prodRows
+      for_import.append(prodDict)
    return for_import
 
 # Write the currentCopy to a new csv for import
@@ -306,6 +322,19 @@ def iterate_folders():
                         # Get back to the working directory for the program
                         os.chdir(wdir)
 
+# Gather a list of all the images for each product and put them in a dictionary
+def get_images(new_copy):
+   sku_with_images = {}
+   for dictN in new_copy:
+      images = []
+      root = 'D:/Software/Dropbox (Royal Brush Mfg Inc)/Pubfiles - Web/art.royalbrush.com/_2021 Shopify/assets/Product Images/**/' + dictN['sku'] + '/*.jpg'
+      files = glob.glob(root, recursive=True)
+      for file in files:
+         images.append(os.path.basename(file))
+      # Ignore any products that don't have any images
+      if len(images) > 0:
+         sku_with_images[dictN['sku']] = images
+   return(sku_with_images)
 
 # Work on the product copy
 # iterate_folders()
@@ -319,11 +348,14 @@ chunked_copy = chunk_copy(cleaned_copy)
 # Prepare the chunked copy with HTML and a dictionary format
 new_copy = prepare_newCopy(chunked_copy)
 
+# Get a list of all the images for later
+product_images = get_images(new_copy)
+
 # Read the Shopify product export into a list of dictionaries
 current_copy = read_currentCopy("C:/Users/office/Downloads/products_export_1.csv")
 
 # Create a new file using the current copy and the new copy for import
-# write_me = update_copy(new_copy, current_copy)
+write_me = update_import(new_copy, current_copy, product_images)
 
-# for row in write_me:
-#    print(row)
+for row in write_me:
+   print(row)
