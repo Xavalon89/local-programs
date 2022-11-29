@@ -8,8 +8,102 @@ from datetime import date
 import glob
 import shutil
 from PIL import Image
+import winsound
 
 ### DEFINE THE FUNCTIONS ###
+
+# Iterate through the folders in the category directory
+
+
+def iterate_folders():
+   for item in cat_folder_list:
+      os.chdir(wdir)
+      item_path = os.path.join(cat_folder_path, item)
+      dir_check = os.path.isdir(item_path)
+
+      # Look inside collection directories only
+      if dir_check:
+         coll_folder_list = os.listdir(item_path)
+
+         # Iterate through the items in each collection
+         for coll_item in coll_folder_list:
+            coll_item_path = os.path.join(item_path, coll_item)
+
+            # Find the XLSX files and do stuff to them
+            if os.path.splitext(coll_item)[1] == ".xlsx":
+
+               # Get into the storage directory for the CSVs
+               os.chdir('output_csv')
+
+               # Convert the spreadsheet into individual CSVs
+               spreadsheet_to_sheets(coll_item_path)
+               print('Converted ', coll_item, ' to individual CSVs.')
+
+               # Exit the storage directory for the CSVs
+               os.chdir('..')
+
+            # Do stuff with the image folders
+            else:
+               # Get a list of all the items within each image folder
+               prod_image_list = os.listdir(coll_item_path)
+
+               # Find out if the folder is empty and skip it
+               if len(prod_image_list) == 0:
+                  print(coll_item, ' is empty')
+                  continue
+
+               # Find out if there are subfolders in the image folders
+               for image_item in prod_image_list:
+                  image_item_path = os.path.join(coll_item_path, image_item)
+                  item_check = os.path.isdir(image_item_path)
+
+                  # Move the items in the subfolder up a directory
+                  if item_check:
+                     subfolder_item_list = os.listdir(image_item_path)
+
+                     # Skip images that already exist in the image folder
+                     for sub_item in subfolder_item_list:
+                        sub_item_path = os.path.join(
+                              image_item_path, sub_item)
+                        if os.path.exists(coll_item_path + '/' + sub_item):
+                           print('File already exists: ', sub_item_path)
+                        else:
+                           shutil.move(sub_item_path, coll_item_path)
+                           print(sub_item, ' was moved to ', coll_item_path)
+
+                     # Delete the subfolder now that we don't need it
+                     print(image_item, ' was deleted.')
+                     shutil.rmtree(image_item_path)
+
+                  # Compress the images that we've moved and put them in Dropbox
+                  for folder_path in product_image_folders:
+                     no_slash = folder_path.rstrip(folder_path[-1])
+                     folder_name = os.path.split(no_slash)[1]
+
+                     # See if there is a folder in Dropbox for the product
+                     if coll_item == folder_name:
+                        if len(os.listdir(coll_item_path)) == 0:
+                           print('Folder ', coll_item_path, ' is empty.')
+                           continue
+
+                        # Move to the directory in Dropbox where the images will be saved
+                        os.chdir(folder_path)
+
+                        # Compress any images larger than 1000 KB
+                        compress_images(prod_image_list, coll_item_path)
+
+                        # Add the rest of the images to the Dropbox folder
+                        for filename in prod_image_list:
+                           if os.path.exists(folder_path + filename):
+                              print('File ', filename,
+                                    ' already exists on Dropbox.')
+                           else:
+                              shutil.move(coll_item_path + '/' +
+                                          filename, folder_path + '/' + filename)
+                              print(filename, ' was moved to Dropbox.')
+
+                        # Get back to the working directory for the program
+                        os.chdir(wdir)
 
 ## Convert all sheets in an xlsx file to individual csv files
 def spreadsheet_to_sheets(spreadsheet):
@@ -112,6 +206,7 @@ def prepare_newCopy(cleaned):
       for key in rowDict:
          if key != 'sku' and key != 'title':
             bulletList.append(rowDict[key])
+      print(bulletList)
       if len(bulletList) > 0:
          rowDict['copy'] = bulletList
 
@@ -132,6 +227,29 @@ def prepare_newCopy(cleaned):
       body = body + '</ul>'
       rowDict['copy'] = body
    return(newCopy)
+
+## Gather a list of all the images for each product and put them in a dictionary
+def get_images(new_copy):
+   sku_with_images = {}
+   for dictN in new_copy:
+      images = []
+      root = 'D:/Software/Dropbox (Royal Brush Mfg Inc)/Pubfiles - Web/art.royalbrush.com/_2021 Shopify/assets/Product Images/**/' + dictN['sku'] + '/*.jpg'
+      files = glob.glob(root, recursive=True)
+      for file in files:
+         filepath = os.path.abspath(file)
+         print(filepath)
+         picture = Image.open(filepath)
+         picture = picture.resize((2048, 2048), Image.Resampling.BICUBIC)
+         filesize = os.path.getsize(filepath) / 1000
+         if filesize > 900:
+            picture = Image.open(filepath)
+            picture.save(file, "JPEG", optimize=True, quality=60)
+            print('File ', file, ' was compressed.')
+         images.append(os.path.basename(file))
+      # Ignore any products that don't have any images
+      if len(images) > 0:
+         sku_with_images[dictN['sku']] = images
+   return(sku_with_images)
 
 ## Read the current copy csv and make a list of dictionaries
 def read_currentCopy(file):
@@ -163,6 +281,7 @@ def update_import(new_copy, current_copy, product_images):
       for dictC in current_copy:
          # Checks the current dictionary for the Variant SKU key
          if 'Variant SKU' in dictC:
+            current_handle = dictC['Handle']
             if dictC['Variant SKU'] == dictN['sku']:
                # Create a dictionary for the product columns
                prodCols = {}
@@ -174,55 +293,48 @@ def update_import(new_copy, current_copy, product_images):
                prodCols['Variant SKU'] = dictC['Variant SKU']
                if dictN['sku'] in product_images:   
                   prodCols['Image Src'] = 'https://cdn.shopify.com/s/files/1/0577/0035/2197/files/' + product_images[dictC['Variant SKU']][0]
-                  prodCols['Image Alt Text'] = dictC['Variant SKU'] + ' - ' + dictC['Title'] + dictC['Handle']
+                  prodCols['Image Alt Text'] = dictC['Variant SKU'] + ' - ' + dictC['Title']
 
                # Add the rows for the product
                prodRows.append(prodCols)
 
-         else:
-            if dictN['sku'] in product_images:     
-               for image in product_images[dictN['sku']]:
-                  # Create a dictionary for the product columns
-                  prodCols = {}
+               if dictN['sku'] in product_images:     
+                  for image in product_images[dictN['sku']]:
+                     # Create a dictionary for the product columns
+                     prodCols = {}
 
-                  # Add the keys and values to the columns dictionary
-                  prodCols['Handle'] = dictC['Handle']
-                  prodCols['Image Src'] = 'https://cdn.shopify.com/s/files/1/0577/0035/2197/files/' + image
-                  prodCols['Image Alt Text'] = dictN['sku'] + ' - ' + dictN['title'] + dictC['Handle']
+                     # Add the keys and values to the columns dictionary
+                     prodCols['Handle'] = current_handle
+                     prodCols['Image Src'] = 'https://cdn.shopify.com/s/files/1/0577/0035/2197/files/' + image
+                     prodCols['Image Alt Text'] = dictN['sku'] + ' - ' + dictN['title']
 
-                  # Add the rows for the product
-                  prodRows.append(prodCols)
+                     # Add the rows for the product
+                     prodRows.append(prodCols)
 
       # Assign the key for the product dictionary to the SKU
       prodDict[dictN['sku']] = prodRows
       for_import.append(prodDict)
    return for_import
 
-# Write the currentCopy to a new csv for import
+## Write the currentCopy to a new csv for import
 def write_csv(updated_Copy):
-   csv_cols = ['Handle', 'Title', 'Body (HTML)', 'Variant SKU']
-   csv_file = "newProductCopy.csv"
-   try:
-      with open(csv_file, 'w', newline='') as csvfile:
+    csv_cols = ['Handle', 'Title',
+                'Body (HTML)', 'Variant SKU', 'Image Src', 'Image Alt Text']
+    csv_file = "newProductCopy.csv"
+    try:
+        with open(csv_file, 'w', newline='') as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=csv_cols)
             writer.writeheader()
-            for data in updated_Copy:
-               writer.writerow(data)
-   except IOError:
-      print("I/O error")
+            for prod in updated_Copy:
+               # print(prod)
+               for row in prod:
+                  # print(prod[row])
+                  for item in prod[row]:
+                     print(item)
+                     writer.writerow(item)
 
-# def main():
-#    spreadsheet = os.listdir("spreadsheet")
-#    file = "C:/Users/office/Downloads/currentCopy.csv"
-#    get_sheets(spreadsheet)
-#    spreadsheet = os.listdir("spreadsheet")
-#    clean_CSV = clean_CSVs(spreadsheet)
-#    prepped_copy = prepare_newCopy(clean_CSV)
-#    currentCopy = read_currentCopy(file)
-#    updated_copy = update_copy(prepped_copy, currentCopy)
-#    write_csv(updated_copy)
-
-# main()
+    except IOError:
+        print("I/O error")
 
 ### DO THE THINGS ###
 
@@ -234,128 +346,33 @@ cat_folder_list = os.listdir(cat_folder_path)
 product_images_root = 'D:/Software/Dropbox (Royal Brush Mfg Inc)/Pubfiles - Web/art.royalbrush.com/_2021 Shopify/assets/Product Images/**/'
 product_image_folders = glob.glob(product_images_root, recursive=True)
 
-# Iterate through the folders in the category directory
-def iterate_folders():
-   for item in cat_folder_list:
-      os.chdir(wdir)
-      item_path = os.path.join(cat_folder_path, item)
-      dir_check = os.path.isdir(item_path)
-
-      # Look inside collection directories only
-      if dir_check:
-         coll_folder_list = os.listdir(item_path)
-
-         # Iterate through the items in each collection
-         for coll_item in coll_folder_list:
-               coll_item_path = os.path.join(item_path, coll_item)
-
-               # Find the XLSX files and do stuff to them
-               if os.path.splitext(coll_item)[1] == ".xlsx":
-
-                  # Get into the storage directory for the CSVs
-                  os.chdir('output_csv')
-
-                  # Convert the spreadsheet into individual CSVs
-                  spreadsheet_to_sheets(coll_item_path)
-                  print('Converted ', coll_item, ' to individual CSVs.')
-
-                  # Exit the storage directory for the CSVs
-                  os.chdir('..')
-
-               # Do stuff with the image folders
-               else:
-                  # Get a list of all the items within each image folder
-                  prod_image_list = os.listdir(coll_item_path)
-
-                  # Find out if the folder is empty and skip it
-                  if len(prod_image_list) == 0:
-                     print(coll_item, ' is empty')
-                     continue
-
-                  # Find out if there are subfolders in the image folders
-                  for image_item in prod_image_list:
-                     image_item_path = os.path.join(coll_item_path, image_item)
-                     item_check = os.path.isdir(image_item_path)
-
-                     # Move the items in the subfolder up a directory
-                     if item_check:
-                        subfolder_item_list = os.listdir(image_item_path)
-
-                        # Skip images that already exist in the image folder
-                        for sub_item in subfolder_item_list:
-                           sub_item_path = os.path.join(image_item_path, sub_item)
-                           if os.path.exists(coll_item_path + '/' + sub_item):
-                              print('File already exists: ', sub_item_path)
-                           else:
-                              shutil.move(sub_item_path, coll_item_path)
-                              print(sub_item, ' was moved to ', coll_item_path)
-
-                        # Delete the subfolder now that we don't need it
-                        print(image_item, ' was deleted.')
-                        shutil.rmtree(image_item_path)
-
-                  # Compress the images that we've moved and put them in Dropbox
-                  for folder_path in product_image_folders:
-                     no_slash = folder_path.rstrip(folder_path[-1])
-                     folder_name = os.path.split(no_slash)[1]
-                     
-                     # See if there is a folder in Dropbox for the product
-                     if coll_item == folder_name:
-                        if len(os.listdir(coll_item_path)) == 0:
-                           print('Folder ', coll_item_path, ' is empty.')
-                           continue
-
-                        # Move to the directory in Dropbox where the images will be saved
-                        os.chdir(folder_path)
-
-                        # Compress any images larger than 1000 KB
-                        compress_images(prod_image_list, coll_item_path)
-
-                        # Add the rest of the images to the Dropbox folder
-                        for filename in prod_image_list:
-                           if os.path.exists(folder_path + filename):
-                              print('File ', filename, ' already exists on Dropbox.')
-                           else:
-                              shutil.move(coll_item_path + '/' + filename, folder_path + '/' + filename)
-                              print(filename, ' was moved to Dropbox.')
-                        
-                        # Get back to the working directory for the program
-                        os.chdir(wdir)
-
-# Gather a list of all the images for each product and put them in a dictionary
-def get_images(new_copy):
-   sku_with_images = {}
-   for dictN in new_copy:
-      images = []
-      root = 'D:/Software/Dropbox (Royal Brush Mfg Inc)/Pubfiles - Web/art.royalbrush.com/_2021 Shopify/assets/Product Images/**/' + dictN['sku'] + '/*.jpg'
-      files = glob.glob(root, recursive=True)
-      for file in files:
-         images.append(os.path.basename(file))
-      # Ignore any products that don't have any images
-      if len(images) > 0:
-         sku_with_images[dictN['sku']] = images
-   return(sku_with_images)
-
 # Work on the product copy
 # iterate_folders()
 
 # Clean the copy provided by the CSVs
+winsound.Beep(140, 500)
 cleaned_copy = clean_CSVs()
 
 # Chunk the cleaned copy into lists
+winsound.Beep(240, 500)
 chunked_copy = chunk_copy(cleaned_copy)
 
 # Prepare the chunked copy with HTML and a dictionary format
+winsound.Beep(340, 500)
 new_copy = prepare_newCopy(chunked_copy)
 
 # Get a list of all the images for later
+winsound.Beep(440, 500)
 product_images = get_images(new_copy)
 
 # Read the Shopify product export into a list of dictionaries
+winsound.Beep(540, 500)
 current_copy = read_currentCopy("C:/Users/office/Downloads/products_export_1.csv")
 
 # Create a new file using the current copy and the new copy for import
+winsound.Beep(640, 500)
 write_me = update_import(new_copy, current_copy, product_images)
 
-for row in write_me:
-   print(row)
+# Write the data to a csv for upload
+winsound.Beep(740, 500)
+write_csv(write_me)
